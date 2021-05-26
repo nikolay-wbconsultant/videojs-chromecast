@@ -50,6 +50,7 @@ ChromecastTech = {
       this._remotePlayerController = this._chromecastSessionManager.getRemotePlayerController();
       this._listenToPlayerControllerEvents();
       this.on('dispose', this._removeAllEventListeners.bind(this));
+      this.videojsPlayer.remoteTextTracks().on('change', this._onChangeTrack.bind(this));
 
       this._hasPlayedAnyItem = false;
       this._requestTitle = options.requestTitleFn || _.noop;
@@ -144,6 +145,30 @@ ChromecastTech = {
       this._playSource(source, 0);
    },
 
+   _onChangeTrack: function() {
+      var castSession = cast.framework.CastContext.getInstance().getCurrentSession(),
+         activeTrackIds = [],
+         media,
+         subtitles,
+         tracksInfoRequest;
+      
+      if (castSession) {
+         subtitles = this.videojsPlayer.remoteTextTracks();
+         media = castSession.getMediaSession();
+
+         for (var i = 0; i < subtitles.tracks_.length; i++) {
+            if (subtitles.tracks_[i].mode === 'showing') {
+               activeTrackIds = [i];
+            } else {
+               activeTrackIds = [];
+            }
+         }
+      }
+
+      tracksInfoRequest = new chrome.cast.media.EditTracksInfoRequest(activeTrackIds);
+      media.editTracksInfo(tracksInfoRequest);
+   },
+
    /**
     * Plays the given source, beginning at an optional starting time.
     *
@@ -154,10 +179,12 @@ ChromecastTech = {
     */
    _playSource: function(source, startTime) {
       var castSession = this._getCastSession(),
-          mediaInfo = new chrome.cast.media.MediaInfo(source.src, source.type),
+          tracks = this.getTextTracks(source),
+          mediaInfo = new chrome.cast.media.MediaInfo(source.src),
           title = this._requestTitle(source),
           subtitle = this._requestSubtitle(source),
           customData = this._requestCustomData(source),
+          trackStyle = new chrome.cast.media.TextTrackStyle(),
           request;
 
       this.trigger('waiting');
@@ -165,6 +192,10 @@ ChromecastTech = {
 
       mediaInfo.metadata = new chrome.cast.media.GenericMediaMetadata();
       mediaInfo.metadata.metadataType = chrome.cast.media.MetadataType.GENERIC;
+      mediaInfo.streamType = chrome.cast.media.StreamType.BUFFERED;
+      mediaInfo.textTrackStyle = trackStyle;
+      mediaInfo.tracks = tracks;
+
       mediaInfo.metadata.title = title;
       mediaInfo.metadata.subtitle = subtitle;
       if (customData) {
@@ -177,6 +208,7 @@ ChromecastTech = {
       request = new chrome.cast.media.LoadRequest(mediaInfo);
       request.autoplay = true;
       request.currentTime = startTime;
+      request.activeTrackIds = [];
 
       this._isMediaLoading = true;
       this._hasPlayedCurrentItem = false;
@@ -191,6 +223,7 @@ ChromecastTech = {
             this.trigger('loadeddata');
             this.trigger('play');
             this.trigger('playing');
+            this._onChangeTrack();
             this._hasPlayedAnyItem = true;
             this._isMediaLoading = false;
          }.bind(this), this._triggerErrorEvent.bind(this));
@@ -323,6 +356,31 @@ ChromecastTech = {
       if ((this._remotePlayer.isMuted && !isMuted) || (!this._remotePlayer.isMuted && isMuted)) {
          this._remotePlayerController.muteOrUnmute();
       }
+   },
+
+   /**
+    * Generate Text Tracks
+    *
+    * @param source {object} the source to play
+    */
+   getTextTracks: function(source) {
+      var tracks = [],
+      customData = this._requestCustomData(source);
+
+      customData.videoCations.map(function(e, i) {
+         var subtitle = new chrome.cast.media.Track(i, chrome.cast.media.TrackType.TEXT);
+
+          subtitle.trackContentId = e.url;
+          subtitle.trackContentType = 'text/vtt';
+          subtitle.subtype = chrome.cast.media.TextTrackType.SUBTITLES;
+          subtitle.name = e.label;
+          subtitle.language = e.language;
+          subtitle.customData = null;
+
+          tracks.push(subtitle);
+      });
+
+      return tracks;
    },
 
    /**
