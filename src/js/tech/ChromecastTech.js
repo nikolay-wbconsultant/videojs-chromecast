@@ -50,7 +50,7 @@ ChromecastTech = {
       this._remotePlayerController = this._chromecastSessionManager.getRemotePlayerController();
       this._listenToPlayerControllerEvents();
       this.on('dispose', this._removeAllEventListeners.bind(this));
-      this.videojsPlayer.remoteTextTracks().on('change', this._onChangeTrack.bind(this));
+      this.videojsPlayer.remoteTextTracks().on('change', this._onChangeTrack.bind(this, options.source));
 
       this._hasPlayedAnyItem = false;
       this._requestTitle = options.requestTitleFn || _.noop;
@@ -145,28 +145,30 @@ ChromecastTech = {
       this._playSource(source, 0);
    },
 
-   _onChangeTrack: function() {
+   _onChangeTrack: function(source) {
       var castSession = cast.framework.CastContext.getInstance().getCurrentSession(),
+         customData = this._requestCustomData(source),
          activeTrackIds = [],
          media,
          subtitles,
          tracksInfoRequest;
-      
+
       if (castSession) {
          subtitles = this.videojsPlayer.remoteTextTracks();
          media = castSession.getMediaSession();
 
-         for (var i = 0; i < subtitles.tracks_.length; i++) {
-            if (subtitles.tracks_[i].mode === 'showing') {
-               activeTrackIds = [i];
-            } else {
-               activeTrackIds = [];
+         if (subtitles && media && subtitles.tracks_.length > 0 && customData.videoCations.length > 0) {
+            for (var i = 0; i < subtitles.tracks_.length; i++) {
+               if (subtitles.tracks_[i].mode === 'showing') {
+                  activeTrackIds = [i];
+               } else {
+                  activeTrackIds = [];
+               }
             }
+            tracksInfoRequest = new chrome.cast.media.EditTracksInfoRequest(activeTrackIds);
+            media.editTracksInfo(tracksInfoRequest);
          }
       }
-
-      tracksInfoRequest = new chrome.cast.media.EditTracksInfoRequest(activeTrackIds);
-      media.editTracksInfo(tracksInfoRequest);
    },
 
    /**
@@ -180,7 +182,7 @@ ChromecastTech = {
    _playSource: function(source, startTime) {
       var castSession = this._getCastSession(),
           tracks = this.getTextTracks(source),
-          mediaInfo = new chrome.cast.media.MediaInfo(source.src),
+          mediaInfo = new chrome.cast.media.MediaInfo(source.src, source.type),
           title = this._requestTitle(source),
           subtitle = this._requestSubtitle(source),
           customData = this._requestCustomData(source),
