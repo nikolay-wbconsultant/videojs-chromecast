@@ -151,15 +151,17 @@ ChromecastTech = {
          activeTrackIds = [],
          media,
          subtitles,
+         subTitleTracks,
          tracksInfoRequest;
 
       if (castSession) {
          subtitles = this.videojsPlayer.remoteTextTracks();
+         subTitleTracks = _.filter(subtitles.tracks_, function(t) { return !t.src });
          media = castSession.getMediaSession();
 
-         if (subtitles && media && subtitles.tracks_.length > 0 && customData.videoCations.length > 0) {
-            for (var i = 0; i < subtitles.tracks_.length; i++) {
-               if (subtitles.tracks_[i].mode === 'showing') {
+         if (subtitles && media && subTitleTracks.length > 0 && customData.videoCations.length > 0) {
+            for (var i = 0; i < subTitleTracks.length; i++) {
+               if (subTitleTracks[i].mode === 'showing') {
                   activeTrackIds = [i];
                } else {
                   activeTrackIds = [];
