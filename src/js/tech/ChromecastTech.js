@@ -10,7 +10,7 @@ var ChromecastSessionManager = require('../chromecast/ChromecastSessionManager')
  * @module ChomecastTech
  */
 
- /**
+/**
  * The Video.js Tech class is the base class for classes that provide media playback
  * technology implementations to Video.js such as HTML5, Flash and HLS.
  *
@@ -58,6 +58,9 @@ ChromecastTech = {
       this._requestCustomData = options.requestCustomDataFn || _.noop;
       // See `currentTime` function
       this._initialStartTime = options.startTime || 0;
+      this._isScrubbing = false;
+      this._isSeeking = false;
+      this._scrubbingTime = this._initialStartTime;
 
       this._playSource(options.source, this._initialStartTime);
       this.ready(function() {
@@ -147,12 +150,12 @@ ChromecastTech = {
 
    _onChangeTrack: function(source) {
       var castSession = cast.framework.CastContext.getInstance().getCurrentSession(),
-         customData = this._requestCustomData(source),
-         activeTrackIds = [],
-         media,
-         subtitles,
-         subTitleTracks,
-         tracksInfoRequest;
+          customData = this._requestCustomData(source),
+          activeTrackIds = [],
+          media,
+          subtitles,
+          subTitleTracks,
+          tracksInfoRequest;
 
       if (castSession) {
          subtitles = this.videojsPlayer.remoteTextTracks();
@@ -217,20 +220,20 @@ ChromecastTech = {
       this._isMediaLoading = true;
       this._hasPlayedCurrentItem = false;
       castSession.loadMedia(request)
-         .then(function() {
-            if (!this._hasPlayedAnyItem) {
-               // `triggerReady` is required here to notify the Video.js player that the
-               // Tech has been initialized and is ready.
-               this.triggerReady();
-            }
-            this.trigger('loadstart');
-            this.trigger('loadeddata');
-            this.trigger('play');
-            this.trigger('playing');
-            this._onChangeTrack();
-            this._hasPlayedAnyItem = true;
-            this._isMediaLoading = false;
-         }.bind(this), this._triggerErrorEvent.bind(this));
+          .then(function() {
+             if (!this._hasPlayedAnyItem) {
+                // `triggerReady` is required here to notify the Video.js player that the
+                // Tech has been initialized and is ready.
+                this.triggerReady();
+             }
+             this.trigger('loadstart');
+             this.trigger('loadeddata');
+             this.trigger('play');
+             this.trigger('playing');
+             this._onChangeTrack();
+             this._hasPlayedAnyItem = true;
+             this._isMediaLoading = false;
+          }.bind(this), this._triggerErrorEvent.bind(this));
    },
 
    /**
@@ -242,17 +245,55 @@ ChromecastTech = {
     * @see {@link http://docs.videojs.com/Tech.html#setCurrentTime}
     */
    setCurrentTime: function(time) {
+      if (this.scrubbing()) {
+         this._scrubbingTime = time;
+         return false;
+      }
       var duration = this.duration();
 
       if (time > duration || !this._remotePlayer.canSeek) {
          return;
       }
+
+      var self = this;
+      // We need to delay the actual seeking, because when you
+      // scrub, videojs does pause() -> setCurrentTime() -> play()
+      // and that triggers a weird bug where the chromecast stops sending
+      // time_changed events.
+      this._isSeeking = true;
+      setTimeout(function() {
+         // Seeking to any place within (approximately) 1 second of the end of the item
+         // causes the Video.js player to get stuck in a BUFFERING state. To work around
+         // this, we only allow seeking to within 1 second of the end of an item.
+         self._remotePlayer.currentTime = Math.min(duration - 1, time);
+         self._remotePlayerController.seek();
+         self._isSeeking = false;
+      }, 500);
+      this._triggerTimeUpdateEvent();
       // Seeking to any place within (approximately) 1 second of the end of the item
       // causes the Video.js player to get stuck in a BUFFERING state. To work around
       // this, we only allow seeking to within 1 second of the end of an item.
-      this._remotePlayer.currentTime = Math.min(duration - 1, time);
-      this._remotePlayerController.seek();
-      this._triggerTimeUpdateEvent();
+      // this._remotePlayer.currentTime = Math.min(duration - 1, time);
+      // this._remotePlayerController.seek();
+      // this._triggerTimeUpdateEvent();
+   },
+
+   seeking: function() {
+      return this._isSeeking;
+   },
+
+   scrubbing: function() {
+      return this._isScrubbing;
+   },
+
+   setScrubbing: function(newValue) {
+      if (newValue === true) {
+         this._scrubbingTime = this.currentTime();
+         this._isScrubbing = true;
+      } else {
+         this._isScrubbing = false;
+         this.setCurrentTime(this._scrubbingTime);
+      }
    },
 
    /**
@@ -369,19 +410,19 @@ ChromecastTech = {
     */
    getTextTracks: function(source) {
       var tracks = [],
-      customData = this._requestCustomData(source);
+          customData = this._requestCustomData(source);
 
       customData.videoCations.map(function(e, i) {
          var subtitle = new chrome.cast.media.Track(i, chrome.cast.media.TrackType.TEXT);
 
-          subtitle.trackContentId = e.url;
-          subtitle.trackContentType = 'text/vtt';
-          subtitle.subtype = chrome.cast.media.TextTrackType.SUBTITLES;
-          subtitle.name = e.label;
-          subtitle.language = e.language;
-          subtitle.customData = null;
+         subtitle.trackContentId = e.url;
+         subtitle.trackContentType = 'text/vtt';
+         subtitle.subtype = chrome.cast.media.TextTrackType.SUBTITLES;
+         subtitle.name = e.label;
+         subtitle.language = e.language;
+         subtitle.customData = null;
 
-          tracks.push(subtitle);
+         tracks.push(subtitle);
       });
 
       return tracks;
@@ -610,9 +651,9 @@ ChromecastTech = {
 
       index = _.findIndex(this._eventListeners, function(registeredListener) {
          return registeredListener.target === listener.target &&
-            registeredListener.type === listener.type &&
-            registeredListener.callback === listener.callback &&
-            registeredListener.context === listener.context;
+             registeredListener.type === listener.type &&
+             registeredListener.callback === listener.callback &&
+             registeredListener.context === listener.context;
       });
 
       if (index !== -1) {
@@ -750,7 +791,7 @@ ChromecastTech = {
 
 /**
  * Registers the ChromecastTech Tech with Video.js. Calls {@link
- * http://docs.videojs.com/Tech.html#.registerTech}, which will add a Tech called
+    * http://docs.videojs.com/Tech.html#.registerTech}, which will add a Tech called
  * `chromecast` to the list of globally registered Video.js Tech implementations.
  *
  * [Video.js Tech](http://docs.videojs.com/Tech.html) are initialized and used
